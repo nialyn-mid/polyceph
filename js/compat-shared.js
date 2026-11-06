@@ -205,16 +205,15 @@ export async function getMaxContextTokens() {
                 const openaiModule = await getOpenAIModule();
                 const { model_list, getChatCompletionModel } = openaiModule || {};
                 const activeModelId = getChatCompletionModel(oaiSettings);
-                const model = model_list.find(m => m.id === activeModelId);
+                const model = model_list?.find(m => m.id === activeModelId);
 
                 if (model) {
                     modelHardCap = Number(model.context_length || model.max_context_length || modelHardCap);
                 } else {
-                    throw new Error(`Model "${activeModelId}" not found in model_list.`);
+                    logger.warn(`Model "${activeModelId}" not in model_list; using configured context limit.`);
                 }
             } catch (e) {
-                logger.error('Failed to resolve model metadata from openai.js:', e);
-                throw new Error(`Unable to determine hard context limit for OpenAI model: ${e.message}`);
+                logger.warn('Chat Completion model metadata unavailable; using configured context limit:', e);
             }
         } else {
             // Unlocked context (Global Power User or OpenAI specific)
@@ -231,21 +230,22 @@ export async function getMaxContextTokens() {
         // For TextGen, check if it's OpenRouter which provides model-specific caps
         if (api === 'textgenerationwebui' && !isUnlocked) {
             try {
-                const tgModelsModule = await getTextGenModelsModule();
                 const tgSettingsModule = await getTextGenSettingsModule();
-                const { openRouterModels } = tgModelsModule || {};
                 const { textgenerationwebui_settings } = tgSettingsModule || {};
-                const activeModelId = textgenerationwebui_settings?.openrouter_model;
-                const model = openRouterModels.find(m => m.id === activeModelId);
+                if (textgenerationwebui_settings?.type === 'openrouter') {
+                    const tgModelsModule = await getTextGenModelsModule();
+                    const { openRouterModels } = tgModelsModule || {};
+                    const activeModelId = textgenerationwebui_settings.openrouter_model;
+                    const model = openRouterModels?.find(m => m.id === activeModelId);
 
-                if (model) {
-                    modelHardCap = Number(model.context_length || modelHardCap);
-                } else {
-                    throw new Error(`OpenRouter model "${activeModelId}" not found.`);
+                    if (model) {
+                        modelHardCap = Number(model.context_length || modelHardCap);
+                    } else {
+                        logger.warn(`OpenRouter model "${activeModelId}" not in model list; using configured context limit.`);
+                    }
                 }
             } catch (e) {
-                logger.error('Failed to resolve model metadata from textgen-models.js:', e);
-                throw new Error(`Unable to determine hard context limit for TextGen model: ${e.message}`);
+                logger.warn('Text Completion model metadata unavailable; using configured context limit:', e);
             }
         } else if (isUnlocked) {
             modelHardCap = Infinity;
@@ -271,8 +271,8 @@ export async function getMaxContextTokens() {
         }
     }
 
-    // If we still have no hard cap and it's not unlocked, we are in an "unsure" state
-    if (modelHardCap === Infinity) {
+    // Missing model metadata is OK when a configured context limit is available.
+    if (!Number.isFinite(requestedLimit) || requestedLimit <= 0) {
         const errorMsg = `Unable to determine reliable context limit for API: ${api}. Aborting for safety.`;
         logger.error(errorMsg);
         throw new Error(errorMsg);
